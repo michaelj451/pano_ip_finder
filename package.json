@@ -1,0 +1,19 @@
+{
+  "name": "pano_ip_finder",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.4.1",
+    "ipaddr.js": "^2.3.0",
+    "multer": "^2.0.2"
+  }
+}
