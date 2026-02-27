@@ -16,6 +16,14 @@ function getEntryName(entry) {
     return entry?.["@_name"] || entry?.["@name"] || entry?.name || null;
 }
 
+function normalizeMode(raw) {
+    const m = String(raw || "overlap").trim().toLowerCase();
+    if (m === "overlap" || m === "contained" || m === "exact") {
+        return m;
+    }
+    return "overlap";
+}
+
 /**
  * Resolve an object/group member into concrete address strings.
  * Handles:
@@ -60,8 +68,8 @@ function resolveMember(scopeKey, member, maps, depth = 0, seen = new Set()) {
 /**
  * Check one rule for matches.
  * Adds special handling:
- *  - If rule member is an object NAME and that object resolves to a value matching target,
- *    we emit resolved_value = "(matched by object name)" to make it obvious.
+ *  - If rule member is an address OBJECT name and it resolves to a value matching target,
+ *    we emit resolved_value = "(matched by object name)" so it’s obvious.
  */
 function checkRuleForMatches({
     scopeKey,
@@ -303,8 +311,7 @@ router.get("/search", (req, res) => {
             return res.status(400).json({ error: "Missing ip query param (or q/target)" });
         }
 
-        const modeRaw = String(req.query.mode || "overlap").trim().toLowerCase();
-        const mode = modeRaw === "contained" ? "contained" : "overlap";
+        const mode = normalizeMode(req.query.mode);
 
         const root = loadAndParseConfig();
         const matches = findMatchingRules(root, raw, mode);
