@@ -1,3 +1,5 @@
+// app/server.js
+
 const express = require("express");
 const { CONFIG_FILE } = require("./lib/config");
 

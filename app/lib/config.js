@@ -1,3 +1,4 @@
+// app/lib/config.js
 const fs = require("fs");
 const path = require("path");
 const { XMLParser } = require("fast-xml-parser");

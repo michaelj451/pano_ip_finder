@@ -1,3 +1,4 @@
+// app/routes/diag.js
 const express = require("express");
 const { loadAndParseConfig, CONFIG_FILE } = require("../lib/config");
 const { buildObjectMaps, countDiscoveredRules } = require("../lib/parse");

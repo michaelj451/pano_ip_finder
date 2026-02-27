@@ -1,3 +1,5 @@
+// app/routes/search.js
+
 const express = require("express");
 const { loadAndParseConfig } = require("../lib/config");
 const { buildObjectMaps } = require("../lib/parse");
