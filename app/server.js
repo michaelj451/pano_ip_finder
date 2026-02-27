@@ -4,51 +4,9 @@ const { CONFIG_FILE } = require("./lib/config");
 const app = express();
 const PORT = process.env.PORT || 5050;
 
-/*
-    Load a router module safely.
-    Handles:
-        module.exports = router
-        module.exports = { router }
-        export default router (ESM transpiled)
-*/
-function loadRouter(relPath) {
-    const mod = require(relPath);
+const searchRoutes = require("./routes/search");
 
-    console.log("--------------------------------------------------");
-    console.log(`Loading: ${relPath}`);
-    console.log("Resolved to:", require.resolve(relPath));
-    console.log("typeof module:", typeof mod);
-    if (mod && typeof mod === "object") {
-        console.log("module keys:", Object.keys(mod));
-    }
-
-    let router = null;
-
-    if (typeof mod === "function") {
-        router = mod;
-    } else if (mod && typeof mod.router === "function") {
-        router = mod.router;
-    } else if (mod && typeof mod.default === "function") {
-        router = mod.default;
-    }
-
-    console.log("typeof router:", typeof router);
-    console.log("--------------------------------------------------");
-
-    if (typeof router !== "function") {
-        throw new Error(
-            `Route at ${relPath} did not export an Express router function`
-        );
-    }
-
-    return router;
-}
-
-// Explicit filenames avoid folder shadowing issues
-const diagRoutes = loadRouter("./routes/diag.js");
-const searchRoutes = loadRouter("./routes/search.js");
-
-// Simple homepage
+// Homepage (UI)
 app.get("/", (req, res) => {
     res.type("html").send(`<!doctype html>
 <html>
@@ -68,6 +26,9 @@ app.get("/", (req, res) => {
         code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
         .muted { color: #555; }
         .err { color: #b00020; font-weight: 700; }
+        .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .radio { display: flex; gap: 14px; align-items: center; }
+        label { user-select: none; }
     </style>
 </head>
 <body>
@@ -75,11 +36,24 @@ app.get("/", (req, res) => {
     <p class="muted">Config file: <code>${CONFIG_FILE}</code></p>
 
     <div class="card">
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <input id="ip" placeholder="4.2.2.2  or  10.1.2.0/24" />
+        <div class="row">
+            <input id="ip" placeholder="10.1.2.3  or  10.1.2.0/24" />
             <button id="btn">Search</button>
+
+            <div class="radio">
+                <label>
+                    <input type="radio" name="mode" value="overlap" checked />
+                    overlap
+                </label>
+                <label>
+                    <input type="radio" name="mode" value="contained" />
+                    match (contained)
+                </label>
+            </div>
+
             <span id="status" class="muted"></span>
         </div>
+
         <div id="error" class="err" style="margin-top:10px;"></div>
         <div id="results"></div>
     </div>
@@ -91,22 +65,38 @@ const statusEl = document.getElementById("status");
 const errorEl = document.getElementById("error");
 const resultsEl = document.getElementById("results");
 
-function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[c]));
+}
+
+function selectedMode() {
+    const el = document.querySelector('input[name="mode"]:checked');
+    return el ? el.value : "overlap";
+}
 
 btn.onclick = async () => {
     errorEl.textContent = "";
     resultsEl.innerHTML = "";
+
     const ip = ipInput.value.trim();
-    if (!ip) { errorEl.textContent = "Enter an IP or CIDR."; return; }
+    if (!ip) {
+        errorEl.textContent = "Enter an IP or CIDR.";
+        return;
+    }
+
+    const mode = selectedMode();
 
     btn.disabled = true;
     statusEl.textContent = "Searching...";
+
     try {
-        const r = await fetch("/api/search?ip=" + encodeURIComponent(ip));
+        const r = await fetch("/api/search?ip=" + encodeURIComponent(ip) + "&mode=" + encodeURIComponent(mode));
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || "Search failed");
 
-        statusEl.textContent = "Matches: " + data.count;
+        statusEl.textContent = "Matches: " + data.count + " (" + data.mode + ")";
 
         if (data.count === 0) {
             resultsEl.innerHTML = "<p>No matches found.</p>";
@@ -152,7 +142,6 @@ btn.onclick = async () => {
 });
 
 // Mount API routes
-app.use("/api", diagRoutes);
 app.use("/api", searchRoutes);
 
 // Start server
