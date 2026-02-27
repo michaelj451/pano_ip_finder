@@ -1,3 +1,4 @@
+// app/server.js
 const express = require("express");
 const { CONFIG_FILE } = require("./lib/config");
 
@@ -6,6 +7,10 @@ const PORT = process.env.PORT || 5050;
 
 const diagRoutes = require("./routes/diag");
 const searchRoutes = require("./routes/search");
+
+// Mount API routes FIRST (so /api/* never accidentally returns the homepage)
+app.use("/api", diagRoutes);
+app.use("/api", searchRoutes);
 
 // Homepage (UI)
 app.get("/", (req, res) => {
@@ -165,12 +170,23 @@ app.get("/", (req, res) => {
     const progressBar = document.getElementById("progressBar");
     const progressText = document.getElementById("progressText");
 
-    let progressTimer = null;
-    let progressPct = 0;
+    // Export button (insert right after Search)
+    const exportBtn = document.createElement("button");
+    exportBtn.id = "exportCsv";
+    exportBtn.textContent = "Export CSV";
+    exportBtn.disabled = true;
+    exportBtn.style.marginLeft = "8px";
+    btn.parentNode.insertBefore(exportBtn, btn.nextSibling);
+
+    let lastSearchResponse = null;
 
     function esc(s) {
         return String(s).replace(/[&<>"']/g, c => ({
-            "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
         }[c]));
     }
 
@@ -179,30 +195,63 @@ app.get("/", (req, res) => {
         return el ? el.value : "overlap";
     }
 
-    function startProgress(label) {
-        if (progressTimer) clearInterval(progressTimer);
-
-        progressPct = 5;
-        progressBar.style.width = progressPct + "%";
-        progressWrap.style.display = "block";
-        progressText.textContent = label || "Loading config…";
-        progressText.style.display = "block";
-
-        // Indeterminate-ish: move toward 90% while request runs
-        progressTimer = setInterval(() => {
-            const bump = Math.random() * 6;          // 0..6
-            progressPct = Math.min(90, progressPct + bump);
-            progressBar.style.width = progressPct + "%";
-        }, 140);
+    function csvEscape(v) {
+        const s = String(v ?? "");
+        if (/[",\\n\\r]/.test(s)) {
+            return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
     }
 
-    function stopProgress() {
-        if (progressTimer) {
-            clearInterval(progressTimer);
-            progressTimer = null;
+    function toCsv(rows) {
+        const headers = ["device_group", "rulebase", "rule", "matched_on", "object", "resolved_value"];
+        const lines = [headers.join(",")];
+        for (const r of rows) {
+            lines.push([
+                csvEscape(r.device_group),
+                csvEscape(r.rulebase),
+                csvEscape(r.rule),
+                csvEscape(r.matched_on),
+                csvEscape(r.object),
+                csvEscape(r.resolved_value)
+            ].join(","));
         }
+        return lines.join("\\n");
+    }
 
-        // Snap to 100, then hide
+    function downloadCsv(csvText, filename) {
+        const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    exportBtn.onclick = () => {
+        if (!lastSearchResponse || !Array.isArray(lastSearchResponse.matches) || lastSearchResponse.matches.length === 0) {
+            return;
+        }
+        const csv = toCsv(lastSearchResponse.matches);
+        const safeIp = String(lastSearchResponse.ip || "query").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
+        const safeMode = String(lastSearchResponse.mode || "mode").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 30);
+        downloadCsv(csv, \`panorama-ip-finder_\${safeIp}_\${safeMode}.csv\`);
+    };
+
+    function progressStart() {
+        progressWrap.style.display = "block";
+        progressText.style.display = "block";
+        progressBar.style.width = "12%";
+    }
+
+    function progressBump(pct) {
+        progressBar.style.width = pct + "%";
+    }
+
+    function progressEnd() {
         progressBar.style.width = "100%";
         setTimeout(() => {
             progressWrap.style.display = "none";
@@ -211,9 +260,27 @@ app.get("/", (req, res) => {
         }, 250);
     }
 
+    async function fetchJsonOrThrow(url) {
+        const r = await fetch(url);
+
+        const ct = (r.headers.get("content-type") || "").toLowerCase();
+        if (!ct.includes("application/json")) {
+            const text = await r.text();
+            throw new Error("API did not return JSON. First bytes: " + text.slice(0, 80));
+        }
+
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Request failed");
+        return data;
+    }
+
     btn.onclick = async () => {
         errorEl.textContent = "";
         resultsEl.innerHTML = "";
+        statusEl.textContent = "";
+
+        exportBtn.disabled = true;
+        lastSearchResponse = null;
 
         const ip = ipInput.value.trim();
         if (!ip) {
@@ -225,12 +292,18 @@ app.get("/", (req, res) => {
 
         btn.disabled = true;
         statusEl.textContent = "Searching...";
-        startProgress("Loading config…");
+        progressStart();
 
         try {
-            const r = await fetch("/api/search?ip=" + encodeURIComponent(ip) + "&mode=" + encodeURIComponent(mode));
-            const data = await r.json();
-            if (!r.ok) throw new Error(data.error || "Search failed");
+            progressBump(25);
+
+            const url = "/api/search?ip=" + encodeURIComponent(ip) + "&mode=" + encodeURIComponent(mode);
+            const data = await fetchJsonOrThrow(url);
+
+            progressBump(85);
+
+            lastSearchResponse = data;
+            exportBtn.disabled = !(data.matches && data.matches.length);
 
             statusEl.textContent = "Matches: " + data.count + " (" + data.mode + ")";
 
@@ -269,21 +342,22 @@ app.get("/", (req, res) => {
             errorEl.textContent = e.message || String(e);
             statusEl.textContent = "";
         } finally {
-            stopProgress();
+            progressEnd();
             btn.disabled = false;
         }
     };
 </script>
+
 </body>
 </html>`);
 });
 
-// Mount API routes
-app.use("/api", diagRoutes);
-app.use("/api", searchRoutes);
+// Helpful: show 404s under /api as JSON (so the UI doesn’t try to parse HTML)
+app.use("/api", (req, res) => {
+    res.status(404).json({ error: "Unknown API route: " + req.originalUrl });
+});
 
-// Start server
 app.listen(PORT, () => {
     console.log(`Panorama IP Finder server running on port ${PORT}`);
-    console.log(`Using config file: ${CONFIG_FILE}`)
+    console.log(`Using config file: ${CONFIG_FILE}`);
 });
