@@ -1,16 +1,17 @@
 // app/server.js
 const express = require("express");
-const { CONFIG_FILE } = require("./lib/config");
+const path = require("path");
+const { getConfigFile } = require("./lib/config");
 
 const app = express();
 const PORT = process.env.PORT || 5050;
 
-const diagRoutes = require("./routes/diag");
 const searchRoutes = require("./routes/search");
+const diagRoutes = require("./routes/diag");
+const uploadRoutes = require("./routes/upload");
 
-// Mount API routes FIRST (so /api/* never accidentally returns the homepage)
-app.use("/api", diagRoutes);
-app.use("/api", searchRoutes);
+// Serve uploaded files folder (not strictly required, but useful for debugging)
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // Homepage (UI)
 app.get("/", (req, res) => {
@@ -31,7 +32,7 @@ app.get("/", (req, res) => {
             padding: 16px;
             max-width: 1100px;
         }
-        input {
+        input[type="text"] {
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 8px;
@@ -92,6 +93,30 @@ app.get("/", (req, res) => {
             user-select: none;
         }
 
+        /* --- Upload strip --- */
+        .uploadStrip {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        input[type="file"] {
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            padding: 8px;
+            background: #fff;
+        }
+        .pill {
+            display: inline-block;
+            padding: 4px 10px;
+            border: 1px solid #ddd;
+            border-radius: 999px;
+            background: #fafafa;
+            font-size: 12px;
+            color: #444;
+        }
+
         /* --- Progress bar (bottom) --- */
         #progressWrap {
             position: fixed;
@@ -126,11 +151,17 @@ app.get("/", (req, res) => {
 </head>
 <body>
     <h2>Panorama IP Finder</h2>
-    <p class="muted">Config file: <code>${CONFIG_FILE}</code></p>
+    <p class="muted">Active config: <code id="activeConfig">${getConfigFile()}</code></p>
 
     <div class="card">
+        <div class="uploadStrip">
+            <input id="cfgFile" type="file" accept=".xml,text/xml,application/xml" />
+            <button id="uploadBtn">Upload Config</button>
+            <span class="pill" id="uploadStatus">No upload</span>
+        </div>
+
         <div class="row">
-            <input id="ip" placeholder="10.1.2.3  or  10.1.2.0/24" />
+            <input id="ip" type="text" placeholder="10.1.2.3  or  10.1.2.0/24" />
             <button id="btn">Search</button>
 
             <div class="radio">
@@ -157,7 +188,7 @@ app.get("/", (req, res) => {
 
     <!-- Progress UI -->
     <div id="progressWrap"><div id="progressBar"></div></div>
-    <div id="progressText">Loading config…</div>
+    <div id="progressText">Working…</div>
 
 <script>
     const btn = document.getElementById("btn");
@@ -166,16 +197,20 @@ app.get("/", (req, res) => {
     const errorEl = document.getElementById("error");
     const resultsEl = document.getElementById("results");
 
+    const cfgFileEl = document.getElementById("cfgFile");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const uploadStatus = document.getElementById("uploadStatus");
+    const activeConfigEl = document.getElementById("activeConfig");
+
     const progressWrap = document.getElementById("progressWrap");
     const progressBar = document.getElementById("progressBar");
     const progressText = document.getElementById("progressText");
 
-    // Export button (insert right after Search)
+    // Export button (created dynamically)
     const exportBtn = document.createElement("button");
     exportBtn.id = "exportCsv";
     exportBtn.textContent = "Export CSV";
     exportBtn.disabled = true;
-    exportBtn.style.marginLeft = "8px";
     btn.parentNode.insertBefore(exportBtn, btn.nextSibling);
 
     let lastSearchResponse = null;
@@ -195,6 +230,45 @@ app.get("/", (req, res) => {
         return el ? el.value : "overlap";
     }
 
+    // ----- Progress helpers -----
+    function showProgress(label) {
+        progressWrap.style.display = "block";
+        progressText.style.display = "block";
+        progressText.textContent = label || "Working…";
+        setProgress(0);
+    }
+
+    function setProgress(pct) {
+        const p = Math.max(0, Math.min(100, Number(pct) || 0));
+        progressBar.style.width = p.toFixed(1) + "%";
+    }
+
+    function hideProgress() {
+        progressWrap.style.display = "none";
+        progressText.style.display = "none";
+        setProgress(0);
+    }
+
+    // “Analysis” progress: not real %, but gives feedback while request runs
+    function startAnalysisProgress() {
+        showProgress("Analyzing…");
+        let p = 10;
+        setProgress(p);
+
+        const t = setInterval(() => {
+            // creep toward 90%
+            p = Math.min(90, p + Math.random() * 6);
+            setProgress(p);
+        }, 160);
+
+        return () => {
+            clearInterval(t);
+            setProgress(100);
+            setTimeout(hideProgress, 250);
+        };
+    }
+
+    // ----- CSV Export -----
     function csvEscape(v) {
         const s = String(v ?? "");
         if (/[",\\n\\r]/.test(s)) {
@@ -204,8 +278,18 @@ app.get("/", (req, res) => {
     }
 
     function toCsv(rows) {
-        const headers = ["device_group", "rulebase", "rule", "matched_on", "object", "resolved_value"];
-        const lines = [headers.join(",")];
+        const headers = [
+            "device_group",
+            "rulebase",
+            "rule",
+            "matched_on",
+            "object",
+            "resolved_value"
+        ];
+
+        const lines = [];
+        lines.push(headers.join(","));
+
         for (const r of rows) {
             lines.push([
                 csvEscape(r.device_group),
@@ -216,18 +300,21 @@ app.get("/", (req, res) => {
                 csvEscape(r.resolved_value)
             ].join(","));
         }
+
         return lines.join("\\n");
     }
 
     function downloadCsv(csvText, filename) {
         const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
+
         const a = document.createElement("a");
         a.href = url;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+
         URL.revokeObjectURL(url);
     }
 
@@ -235,45 +322,89 @@ app.get("/", (req, res) => {
         if (!lastSearchResponse || !Array.isArray(lastSearchResponse.matches) || lastSearchResponse.matches.length === 0) {
             return;
         }
+
         const csv = toCsv(lastSearchResponse.matches);
-        const safeIp = String(lastSearchResponse.ip || "query").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
-        const safeMode = String(lastSearchResponse.mode || "mode").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 30);
-        downloadCsv(csv, \`panorama-ip-finder_\${safeIp}_\${safeMode}.csv\`);
+
+        const safeIp = String(lastSearchResponse.ip || "query")
+            .replace(/[^a-zA-Z0-9._-]+/g, "_")
+            .slice(0, 80);
+
+        const safeMode = String(lastSearchResponse.mode || "mode")
+            .replace(/[^a-zA-Z0-9._-]+/g, "_")
+            .slice(0, 30);
+
+        const filename = "panorama-ip-finder_" + safeIp + "_" + safeMode + ".csv";
+        downloadCsv(csv, filename);
     };
 
-    function progressStart() {
-        progressWrap.style.display = "block";
-        progressText.style.display = "block";
-        progressBar.style.width = "12%";
-    }
+    // ----- Upload with REAL progress -----
+    uploadBtn.onclick = () => {
+        errorEl.textContent = "";
+        statusEl.textContent = "";
+        resultsEl.innerHTML = "";
 
-    function progressBump(pct) {
-        progressBar.style.width = pct + "%";
-    }
-
-    function progressEnd() {
-        progressBar.style.width = "100%";
-        setTimeout(() => {
-            progressWrap.style.display = "none";
-            progressText.style.display = "none";
-            progressBar.style.width = "0%";
-        }, 250);
-    }
-
-    async function fetchJsonOrThrow(url) {
-        const r = await fetch(url);
-
-        const ct = (r.headers.get("content-type") || "").toLowerCase();
-        if (!ct.includes("application/json")) {
-            const text = await r.text();
-            throw new Error("API did not return JSON. First bytes: " + text.slice(0, 80));
+        const f = cfgFileEl.files && cfgFileEl.files[0];
+        if (!f) {
+            errorEl.textContent = "Pick an XML file first.";
+            return;
         }
 
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || "Request failed");
-        return data;
-    }
+        const form = new FormData();
+        form.append("config", f);
 
+        uploadBtn.disabled = true;
+        uploadStatus.textContent = "Uploading…";
+
+        showProgress("Uploading config…");
+        setProgress(0);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/upload", true);
+
+        xhr.upload.onprogress = (evt) => {
+            if (!evt.lengthComputable) return;
+            const pct = (evt.loaded / evt.total) * 100;
+            setProgress(pct);
+            progressText.textContent = "Uploading… " + pct.toFixed(0) + "%";
+        };
+
+        xhr.onload = () => {
+            try {
+                const isJson = (xhr.getResponseHeader("content-type") || "").includes("application/json");
+                const data = isJson ? JSON.parse(xhr.responseText) : null;
+
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    uploadStatus.textContent = "Active: " + (data && data.original_name ? data.original_name : "uploaded");
+                    activeConfigEl.textContent = data && data.config_file ? data.config_file : activeConfigEl.textContent;
+                    progressText.textContent = "Upload complete";
+                    setProgress(100);
+                    setTimeout(hideProgress, 250);
+                } else {
+                    const msg = (data && data.error) ? data.error : ("Upload failed (" + xhr.status + ")");
+                    errorEl.textContent = msg;
+                    uploadStatus.textContent = "Upload failed";
+                    hideProgress();
+                }
+            } catch (e) {
+                errorEl.textContent = "Upload response parse error: " + (e.message || String(e));
+                uploadStatus.textContent = "Upload failed";
+                hideProgress();
+            } finally {
+                uploadBtn.disabled = false;
+            }
+        };
+
+        xhr.onerror = () => {
+            errorEl.textContent = "Upload failed (network error).";
+            uploadStatus.textContent = "Upload failed";
+            uploadBtn.disabled = false;
+            hideProgress();
+        };
+
+        xhr.send(form);
+    };
+
+    // ----- Search with analysis progress -----
     btn.onclick = async () => {
         errorEl.textContent = "";
         resultsEl.innerHTML = "";
@@ -291,16 +422,14 @@ app.get("/", (req, res) => {
         const mode = selectedMode();
 
         btn.disabled = true;
-        statusEl.textContent = "Searching...";
-        progressStart();
+        statusEl.textContent = "Searching…";
+
+        const stopProgress = startAnalysisProgress();
 
         try {
-            progressBump(25);
-
-            const url = "/api/search?ip=" + encodeURIComponent(ip) + "&mode=" + encodeURIComponent(mode);
-            const data = await fetchJsonOrThrow(url);
-
-            progressBump(85);
+            const r = await fetch("/api/search?ip=" + encodeURIComponent(ip) + "&mode=" + encodeURIComponent(mode));
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || "Search failed");
 
             lastSearchResponse = data;
             exportBtn.disabled = !(data.matches && data.matches.length);
@@ -342,7 +471,7 @@ app.get("/", (req, res) => {
             errorEl.textContent = e.message || String(e);
             statusEl.textContent = "";
         } finally {
-            progressEnd();
+            stopProgress();
             btn.disabled = false;
         }
     };
@@ -352,12 +481,13 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// Helpful: show 404s under /api as JSON (so the UI doesn’t try to parse HTML)
-app.use("/api", (req, res) => {
-    res.status(404).json({ error: "Unknown API route: " + req.originalUrl });
-});
+// Mount API routes
+app.use("/api", uploadRoutes);
+app.use("/api", diagRoutes);
+app.use("/api", searchRoutes);
 
+// Start server
 app.listen(PORT, () => {
-    console.log(`Panorama IP Finder server running on port ${PORT}`);
-    console.log(`Using config file: ${CONFIG_FILE}`);
+    console.log(`Panorama IP Finder listening on http://0.0.0.0:${PORT}`);
+    console.log(`Using config: ${getConfigFile()}`);
 });
