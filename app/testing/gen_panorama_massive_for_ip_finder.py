@@ -6,7 +6,7 @@ Generate a massive Panorama-export-shaped XML config for stress-testing "Panoram
 
 Features:
 - Address objects with sequential IPv4 hosts from a base network
-  name: test-addr_obj-10.0.0.1
+  name: test-addr_obj-00000001
   value: 10.0.0.1
 - Shared pre-rulebase rules that reference MANY of these objects
 - Optional device-group rulebase rules, also referencing objects
@@ -115,7 +115,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="Output XML file path")
     ap.add_argument("--base-network", default="10.0.0.0/8", help="IPv4 space used for sequential objects")
-    ap.add_argument("--addr-prefix", default="test-addr_obj", help="Address object prefix (name includes IP)")
+    ap.add_argument("--addr-prefix", default="test-addr_obj", help="Address object prefix")
     ap.add_argument("--addr-count", type=int, default=200_000, help="How many address objects to generate")
     ap.add_argument("--rules", type=int, default=100_000, help="How many shared rules to generate")
     ap.add_argument("--src-members", type=int, default=10, help="How many source members per rule")
@@ -159,7 +159,9 @@ def main() -> int:
                 )
 
             ips.append(ip)
-            name = f"{args.addr_prefix}-{ip}"
+
+            # Numeric object names: no IP content in name
+            name = f"{args.addr_prefix}-{i:08d}"  # test-addr_obj-00000051
             write_line(f, f'      <entry name="{name}"><ip-netmask>{ip}</ip-netmask></entry>')
 
             if (i + 1) % args.flush_every == 0:
@@ -169,10 +171,9 @@ def main() -> int:
         f.write(TEMPLATE_SHARED_RULES_PREFIX)
 
         # --- Generate shared rules referencing objects heavily ---
-        # Cycle through object list so everything gets referenced repeatedly.
-        n_ips = len(ips)
-        if n_ips == 0:
-            raise RuntimeError("No IPs generated (unexpected).")
+        n_addrs = args.addr_count
+        if n_addrs <= 0:
+            raise RuntimeError("No address objects generated (unexpected).")
 
         cursor = 0
         for r in range(args.rules):
@@ -185,17 +186,19 @@ def main() -> int:
             # Source members
             write_line(f, "            <source>")
             for _ in range(args.src_members):
-                ip = ips[cursor % n_ips]
+                idx = cursor % n_addrs
                 cursor += 1
-                write_line(f, f"              <member>{args.addr_prefix}-{ip}</member>")
+                member_name = f"{args.addr_prefix}-{idx:08d}"
+                write_line(f, f"              <member>{member_name}</member>")
             write_line(f, "            </source>")
 
             # Destination members
             write_line(f, "            <destination>")
             for _ in range(args.dst_members):
-                ip = ips[cursor % n_ips]
+                idx = cursor % n_addrs
                 cursor += 1
-                write_line(f, f"              <member>{args.addr_prefix}-{ip}</member>")
+                member_name = f"{args.addr_prefix}-{idx:08d}"
+                write_line(f, f"              <member>{member_name}</member>")
             write_line(f, "            </destination>")
 
             write_line(f, "            <source-user><member>any</member></source-user>")
@@ -213,7 +216,7 @@ def main() -> int:
         # Close shared rules + shared section
         f.write(TEMPLATE_SHARED_RULES_SUFFIX_AND_SHARED_CLOSE)
 
-        # --- Optional device-group rules (more references, more fun) ---
+        # --- Optional device-group rules ---
         if args.include_dg:
             dg_rules = args.dg_rules if args.dg_rules > 0 else args.rules // 10
             f.write(TEMPLATE_DEVICES_PREFIX.format(DG_NAME=args.dg))
@@ -227,16 +230,18 @@ def main() -> int:
 
                 write_line(f, "                  <source>")
                 for _ in range(args.src_members):
-                    ip = ips[cursor % n_ips]
+                    idx = cursor % n_addrs
                     cursor += 1
-                    write_line(f, f"                    <member>{args.addr_prefix}-{ip}</member>")
+                    member_name = f"{args.addr_prefix}-{idx:08d}"
+                    write_line(f, f"                    <member>{member_name}</member>")
                 write_line(f, "                  </source>")
 
                 write_line(f, "                  <destination>")
                 for _ in range(args.dst_members):
-                    ip = ips[cursor % n_ips]
+                    idx = cursor % n_addrs
                     cursor += 1
-                    write_line(f, f"                    <member>{args.addr_prefix}-{ip}</member>")
+                    member_name = f"{args.addr_prefix}-{idx:08d}"
+                    write_line(f, f"                    <member>{member_name}</member>")
                 write_line(f, "                  </destination>")
 
                 write_line(f, "                  <source-user><member>any</member></source-user>")
