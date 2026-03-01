@@ -284,7 +284,8 @@ app.get("/", (req, res) => {
             "rule",
             "matched_on",
             "object",
-            "resolved_value"
+            "resolved_value",
+            "match_via"
         ];
 
         const lines = [];
@@ -297,7 +298,8 @@ app.get("/", (req, res) => {
                 csvEscape(r.rule),
                 csvEscape(r.matched_on),
                 csvEscape(r.object),
-                csvEscape(r.resolved_value)
+                csvEscape(r.resolved_value),
+                csvEscape(r.match_via)
             ].join(","));
         }
 
@@ -449,6 +451,7 @@ app.get("/", (req, res) => {
                     <td>\${esc(m.matched_on)}</td>
                     <td><code>\${esc(m.object)}</code></td>
                     <td><code>\${esc(m.resolved_value)}</code></td>
+                    <td><code>\${esc(m.match_via || "")}</code></td>
                 </tr>
             \`).join("");
 
@@ -462,6 +465,7 @@ app.get("/", (req, res) => {
                             <th>Matched On</th>
                             <th>Object/Member</th>
                             <th>Resolved Value</th>
+                            <th>Match Via</th>
                         </tr>
                     </thead>
                     <tbody>\${rows}</tbody>
