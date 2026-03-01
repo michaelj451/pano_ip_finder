@@ -4,7 +4,7 @@ const path = require("path");
 const { XMLParser } = require("fast-xml-parser");
 
 const DEFAULT_CONFIG_FILE =
-    process.env.PANO_CONFIG || path.join(__dirname, "..", "..", "pano_config-1.xml");
+    process.env.PANO_CONFIG || path.join(__dirname, "..", "..", "big_config.xml");
 
 let activeConfigFile = DEFAULT_CONFIG_FILE;
 
