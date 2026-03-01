@@ -18,9 +18,7 @@ function getEntryName(entry) {
 
 function normalizeMode(raw) {
     const m = String(raw || "overlap").trim().toLowerCase();
-    if (m === "overlap" || m === "contained" || m === "exact") {
-        return m;
-    }
+    if (m === "overlap" || m === "contained" || m === "exact") return m;
     return "overlap";
 }
 
@@ -67,9 +65,10 @@ function resolveMember(scopeKey, member, maps, depth = 0, seen = new Set()) {
 
 /**
  * Check one rule for matches.
- * Adds special handling:
- *  - If rule member is an address OBJECT name and it resolves to a value matching target,
- *    we emit resolved_value = "(matched by object name)" so it’s obvious.
+ * Adds match_via for debugging:
+ *  - "literal"        : member was a literal ip/cidr/range in the rule
+ *  - "address-object" : member was an address object name that resolved to a value
+ *  - "address-group"  : member was a group name that resolved (possibly nested) to values
  */
 function checkRuleForMatches({
     scopeKey,
@@ -91,7 +90,7 @@ function checkRuleForMatches({
             const m = String(mem || "").trim();
             if (!m || m.toLowerCase() === "any") continue;
 
-            // 1) If member is literal (ip/cidr/range) check directly
+            // 1) Literal (ip/cidr/range) in rule
             if (parseValue(m) && ipMatches(m, targetStr, mode)) {
                 results.push({
                     device_group: scopeLabel,
@@ -100,11 +99,12 @@ function checkRuleForMatches({
                     matched_on: sideName,
                     object: m,
                     resolved_value: m,
+                    match_via: "literal",
                 });
                 continue;
             }
 
-            // 2) If member is an address OBJECT name, try resolve it once (scope/shared)
+            // 2) Address OBJECT name (scope/shared) -> resolve once
             const addrMap = maps.addr.get(scopeKey);
             const sharedAddr = maps.addr.get("shared");
             const addrVal = (addrMap && addrMap.get(m)) || (sharedAddr && sharedAddr.get(m));
@@ -118,13 +118,14 @@ function checkRuleForMatches({
                         rule: ruleName,
                         matched_on: sideName,
                         object: m,
-                        resolved_value: "(matched by object name)",
+                        resolved_value: val,          // IMPORTANT: show actual value, not a message
+                        match_via: "address-object",
                     });
                 }
                 continue;
             }
 
-            // 3) Otherwise treat as group (or unknown). Resolve recursively.
+            // 3) Group (or unknown) -> resolve recursively
             const resolved = resolveMember(scopeKey, m, maps);
             const candidates = resolved.length ? resolved : [];
 
@@ -137,6 +138,7 @@ function checkRuleForMatches({
                         matched_on: sideName,
                         object: m,
                         resolved_value: val,
+                        match_via: "address-group",
                     });
                 }
             }
